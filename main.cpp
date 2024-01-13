@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <winbgim.h>
 
-#define DEBUG 1
+#define DEBUG 0
 #define N 512
 #define K 256
 
@@ -28,7 +28,12 @@ typedef struct Header {
 void delay(int ms);
 void init_ui();
 void read_data_from_file(char*);
-void R(short *data, float* r, int *T);
+void draw_wave_form();
+void draw_zoom_wave_form(short*, int);
+void draw_r(float*, int);
+int R(short *data, float* r);
+void set_cursor(int id, int pos, int color);
+void check_keyboard();
 void *sliding(void*);
 
 FILE *wav_fp;
@@ -37,34 +42,24 @@ short wav_data[1000000], max_wav_data;
 float divx, divy;
 unsigned int wav_data_len = 0;
 float r_data[K], max_abs_r;
+int sliding_finish = 0;
 unsigned int backup_cursor[2][161];
+int cursor_pos[2] = {-1, -1};
 char tmp_buff[100];
 
 int main() {
 	init_ui();
 	read_data_from_file((char*)"xebesvexchef.wav");
+	draw_wave_form();
 	
-	setcolor(0);
-	setbkcolor(7);
-	outtextxy(20, 105, "0");
-	sprintf(tmp_buff, "%d", max_wav_data + 5000);
-	outtextxy(5, 15, tmp_buff);
-	sprintf(tmp_buff, "-%d", max_wav_data + 5000);
-	outtextxy(5, 190, tmp_buff);
-	
-	setlinestyle(0, 0, 1);
-	setcolor(10);
-	moveto(50, 110);
-	divx = wav_data_len / 900.0;
-	divy = (max_wav_data + 5000) / 80.0;
-	for(int i = 0; i < wav_data_len; i++) {
-		lineto(i / divx + 50, 110 - wav_data[i] / divy);
-	}
-
-	pthread_t sliding_thread, keyboard_thread;
+	// create a seperate thread to slide through all wav data 
+	pthread_t sliding_thread;
 	pthread_create(&sliding_thread, NULL, sliding, (void*) 1);
 	
-	getch();
+	// check keyboard to move the cursor over wave form
+	check_keyboard();
+	
+	// exit the program with success code
 	return 0;
 }
 
@@ -151,7 +146,7 @@ void read_data_from_file(char *filename) {
 	}
 }
 
-void R(short *x, float* r, int *T) {
+int R(short *x, float* r) {
 	for(int k = 0; k < K; k++) {
 		r[k] = 0;
 		for(int i = 0; i < N - k; i++) {
@@ -165,12 +160,92 @@ void R(short *x, float* r, int *T) {
 		if(k > 0 && k < K - 1 && max_r < r[k] && r[k] > r[k - 1] && r[k] > r[k + 1]) {
 			max_r = r[k];
 			max_i = k;
-		}
-		if(max_abs_r < fabs(r[k]))
-			max_abs_r = fabs(r[k]);
-			
+		}	
 	}
-	*T = max_i;
+	return max_i;
+}
+
+void draw_wave_form() {
+	setcolor(0);
+	setbkcolor(7);
+	outtextxy(20, 105, "0");
+	sprintf(tmp_buff, "%d", max_wav_data + 5000);
+	outtextxy(5, 15, tmp_buff);
+	sprintf(tmp_buff, "-%d", max_wav_data + 5000);
+	outtextxy(5, 190, tmp_buff);
+	
+	setlinestyle(0, 0, 1);
+	setcolor(10);
+	moveto(50, 110);
+	divx = wav_data_len / 900.0;
+	divy = (max_wav_data + 5000) / 80.0;
+	for(int i = 0; i < wav_data_len; i++) {
+		lineto(i / divx + 50, 110 - wav_data[i] / divy);
+	}
+}
+
+void draw_zoom_wave_form(short *data, int size) {
+	// redraw the view for zoom wave form
+	bar(50, 210, 490, 390);
+	setlinestyle(2, 0, 1);
+	setcolor(14);
+	setbkcolor(0);
+	line(50, 300, 490, 300);
+	line(50, 255, 490, 255);
+	line(50, 345, 490, 345);
+	line(160, 210, 160, 390);
+	line(270, 210, 270, 390);
+	line(380, 210, 380, 390);
+	
+	short max_wave_data = 0;
+	for(int i = 0; i < size; i++) {
+		if(max_wave_data < abs(data[i]))
+			max_wave_data = abs(data[i]);
+	}
+	
+	// zoom wave form
+	setlinestyle(0, 0, 1);
+	setcolor(10);
+	
+	float divx = size / 440.0;
+	float divy = (max_wave_data + 1000) / 90.0;
+	moveto(50, 300);
+	for(int i = 0; i < size; i++) {
+		lineto(i / divx + 50, 300 - data[i] / divy);
+	}
+}
+
+void draw_r(float *r_data, int T) {
+	// redraw the view for R(x)
+	bar(510, 210, 950, 390);
+	setlinestyle(2, 0, 1);
+	setcolor(14);
+	setbkcolor(0);
+	line(510, 300, 950, 300);
+	line(510, 255, 950, 255);
+	line(510, 345, 950, 345);
+	line(620, 210, 620, 390);
+	line(730, 210, 730, 390);
+	line(840, 210, 840, 390);
+	
+	float max_r = 0;
+	for(int i = 0; i < K; i++) {
+		if(max_r < fabs(r_data[i]))
+			max_r = fabs(r_data[i]);
+	}
+	
+	// R(x)
+	setlinestyle(0, 0, 1);
+	setcolor(10);
+	float divx = 256.0 / 440;
+	float divy = max_r != 0 ? max_r / 90.0 : 1;
+	moveto(510, 210);
+	for(int i = 0; i < K; i++) {
+		lineto(i / divx + 510, 300 - r_data[i] / divy);
+	}
+	
+	setcolor(4);
+	line(510 + T / divx, 210, 510 + T / divx, 390);
 }
 
 void *sliding(void *tid) {
@@ -178,64 +253,13 @@ void *sliding(void *tid) {
 	float freq = 0;
 	
 	for(int i = 0; i + N < wav_data_len; i+= N / 2) {
-		divx = wav_data_len / 900.0;
-		for(int j = 0; j <= 160; j++) {
-			if(i > 0) {
-				putpixel(50 + (i - N / 2) / divx, j + 30, backup_cursor[0][j]);
-				putpixel(50 + (i + N / 2) / divx, j + 30, backup_cursor[1][j]);
-			}
-			backup_cursor[0][j] = getpixel(50 + i / divx, j + 30);
-			backup_cursor[1][j] = getpixel(50 + (i + N) / divx, j + 30);
-		}
-		setlinestyle(0, 0, 1);
-		setcolor(4);
-		line(50 + i / divx, 30, 50 + i / divx, 190);
-		setcolor(1);
-		line(50 + (i + N) / divx, 30, 50 + (i + N) / divx, 190);
+		set_cursor(0, i, 4);
+		set_cursor(1, i + N, 1);
 		
-		R(wav_data + i, r_data, &T);
+		T = R(wav_data + i, r_data);
 		
-		bar(50, 210, 490, 390);
-		setlinestyle(2, 0, 1);
-		setcolor(14);
-		setbkcolor(0);
-		line(50, 300, 490, 300);
-		line(50, 255, 490, 255);
-		line(50, 345, 490, 345);
-		line(160, 210, 160, 390);
-		line(270, 210, 270, 390);
-		line(380, 210, 380, 390);
-		
-		bar(510, 210, 950, 390);
-		setcolor(14);
-		line(510, 300, 950, 300);
-		line(510, 255, 950, 255);
-		line(510, 345, 950, 345);
-		line(620, 210, 620, 390);
-		line(730, 210, 730, 390);
-		line(840, 210, 840, 390);
-		
-		// wave form
-		setlinestyle(0, 0, 1);
-		setcolor(10);
-		
-		divx = 512.0 / 440;
-		divy = 400;
-		moveto(50, 300);
-		for(int j = 0; j < N; j++) {
-			lineto(j / divx + 50, 300 - wav_data[i + j] / divy);
-		}
-		
-		// R(x)
-		divx = 256.0 / 440;
-		divy = max_abs_r != 0 ? max_abs_r / 90.0 : 1;
-		moveto(510, 210);
-		for(int j = 0; j < K; j++) {
-			lineto(j / divx + 510, 300 - r_data[j] / divy);
-		}
-		
-		setcolor(4);
-		line(510 + T / divx, 210, 510 + T / divx, 390);	
+		draw_zoom_wave_form(wav_data + i, 512);	
+		draw_r(r_data, T);
 		
 		// frequency
 		setcolor(10);
@@ -247,6 +271,59 @@ void *sliding(void *tid) {
 		
 		delay(300);
 	}
-	pthread_exit(NULL);
+	
+	set_cursor(0, -1, 0);
+	set_cursor(1, -1, 0);
+	sliding_finish = 1;
+	pthread_exit(NULL);		// finish the thread
 }
 
+void check_keyboard() {
+	float divx = wav_data_len / 900.0;
+	
+	while(1) {
+		char key = getch();
+
+		if(key == 't' && sliding_finish == 1) {
+			if(cursor_pos[0] > 0) 
+				set_cursor(0, cursor_pos[0] - divx, 4);
+		}
+		else if(key == 'T' && sliding_finish == 1) {
+			if(cursor_pos[1] > cursor_pos[0])
+				set_cursor(1, cursor_pos[1] - divx, 1);
+		}
+		else if(key == 'p') {
+			if(cursor_pos[0] < cursor_pos[1])
+				set_cursor(0, cursor_pos[0] + divx, 4);
+		}
+		else if(key == 'P') {
+			if(cursor_pos[1] + divx < wav_data_len)
+				set_cursor(1, cursor_pos[1] + divx, 1);
+		}
+		else if(key == 'i') {
+			draw_zoom_wave_form(wav_data + cursor_pos[0], cursor_pos[1] - cursor_pos[0] + 1);
+		}
+		else if(key == 'x') {
+			break;
+		}
+	}
+}
+
+void set_cursor(int id, int pos, int color) {
+	float divx = wav_data_len / 900.0;
+	for(int i = 0; i <= 160; i++) {
+		if(cursor_pos[id] >= 0) {
+			putpixel(50 + cursor_pos[id] / divx, i + 30, backup_cursor[id][i]);
+		}
+		if(pos >= 0) {
+			backup_cursor[id][i] = getpixel(50 + pos / divx, i + 30);
+		}
+	}
+	cursor_pos[id] = pos;
+	
+	if(pos >= 0) {
+		setlinestyle(0, 0, 1);
+		setcolor(color);
+		line(50 + pos / divx, 30, 50 + pos / divx, 190);
+	}
+}
